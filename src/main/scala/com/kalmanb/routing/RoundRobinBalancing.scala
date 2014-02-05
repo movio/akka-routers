@@ -5,13 +5,17 @@ import akka.dispatch.Dispatchers
 import akka.routing._
 import java.util.concurrent.atomic.AtomicLong
 
-case class RoundRobinBalancing(routees: Iterable[ActorRef] = Nil,
-          val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
-          val supervisorStrategy: SupervisorStrategy = RoundRobinBalancing.defaultSupervisorStrategy) extends RouterConfig {
+case class RoundRobinBalancing(routeeRefs: Iterable[ActorRef] = Seq.empty,
+                               val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
+                               val supervisorStrategy: SupervisorStrategy = RoundRobinBalancing.defaultSupervisorStrategy)
+    extends RouterConfig with SmallestMailboxLike {
 
+  def nrOfInstances: Int = 0 // not used
 
-  def createRoute(routeeProvider: RouteeProvider): Route = {
-    routeeProvider.registerRoutees(routees)
+  def routees: Iterable[String] = Seq.empty // not used
+
+  override def createRoute(routeeProvider: RouteeProvider): Route = {
+    routeeProvider.registerRoutees(routeeRefs)
 
     val next = new AtomicLong(0)
 
@@ -31,7 +35,7 @@ case class RoundRobinBalancing(routees: Iterable[ActorRef] = Nil,
   }
 }
 
-object RoundRobinBalancing  {
+object RoundRobinBalancing {
   val defaultSupervisorStrategy: SupervisorStrategy = OneForOneStrategy() {
     case _ ⇒ SupervisorStrategy.Escalate
   }
