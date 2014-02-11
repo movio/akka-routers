@@ -14,8 +14,8 @@ libraryDependencies ++= Seq(
 
 // TODO - akka version based on version
 libraryDependencies ++= Seq(
-  "com.typesafe.akka" %% "akka-actor" % "2.1.2",
-  "com.typesafe.akka" %% "akka-testkit" % "2.1.2" % "test"
+  "com.typesafe.akka" %% "akka-actor" % "2.1.0",
+  "com.typesafe.akka" %% "akka-testkit" % "2.1.0" % "test"
 )
 
 
