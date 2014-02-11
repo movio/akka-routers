@@ -7,14 +7,14 @@ import akka.routing._
 import scala.concurrent.duration._
 import scala.collection.immutable._
 
-class RoundRobinBalancingTest extends TestSpec {
+class RoundRobinSteppingTest extends TestSpec {
   implicit val system = ActorSystem("test")
 
-  describe("RoundRobinBalancing router") {
+  describe("RoundRobinStepping router") {
     it("should route messages to a single actor") {
       val actor1 = TestProbe()
       val routeeRefs = Seq(actor1.ref)
-      val router = system.actorOf(Props().withRouter(RoundRobinBalancing(routeeRefs = routeeRefs)))
+      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
 
       router ! "one"
       router ! "two"
@@ -27,7 +27,7 @@ class RoundRobinBalancingTest extends TestSpec {
       val actor1 = TestProbe()
       val actor2 = TestProbe()
       val routeeRefs = Seq(actor1.ref, actor2.ref)
-      val router = system.actorOf(Props().withRouter(RoundRobinBalancing(routeeRefs = routeeRefs)))
+      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
 
       router ! "one"
       router ! "two"
@@ -41,8 +41,8 @@ class RoundRobinBalancingTest extends TestSpec {
     }
 
     it("should send Broadcast messages to all routeeRefs") {
-      val routeeRefs = (1 to 5) map (_ => TestProbe())
-      val router = system.actorOf(Props().withRouter(RoundRobinBalancing(routeeRefs = routeeRefs map (_.ref))))
+      val routeeRefs = (1 to 5) map (_ ⇒ TestProbe())
+      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs map (_.ref))))
 
       router ! Broadcast("one")
 
@@ -51,11 +51,11 @@ class RoundRobinBalancingTest extends TestSpec {
 
     it("should send messages to dead letter if no routeeRefs available") {
       val routeeRefs = List.empty
-      val router = system.actorOf(Props().withRouter(RoundRobinBalancing(routeeRefs = routeeRefs)))
+      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
 
       val listener = TestProbe()
       system.eventStream.subscribe(listener.ref, classOf[DeadLetter])
-      
+
       router ! "one"
       listener.expectMsgType[DeadLetter]
     }
@@ -63,35 +63,42 @@ class RoundRobinBalancingTest extends TestSpec {
 
   describe("below watermark") {
     it(s"should round robin until mailbox a mailbox size exceeds lowWaterMark") {
-      val routeeRefs = (1 to 3).map (_ => TestActorRef(new Tester(4)))
-      val router = system.actorOf(Props().withRouter(RoundRobinBalancing(routeeRefs = routeeRefs)))
+      val routeeRefs = (1 to 3).map(_ ⇒ TestActorRef(new Tester()))
+      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
 
-      (1 to 12) map (i => router ! i)
+      (1 to 12) map (i ⇒ router ! i)
 
-      Thread sleep 100 
+      Thread sleep 100
 
-      routeeRefs foreach {r =>
-        r.underlyingActor.messagesReveived.size should be (4)
+      routeeRefs foreach { r ⇒
+        r.underlyingActor.messagesReveived.size should be(4)
       }
       val firstRouteeMessages = routeeRefs(0).underlyingActor.messagesReveived
-      firstRouteeMessages(0) should be (1)
-      firstRouteeMessages(1) should be (4)
-      firstRouteeMessages(2) should be (7)
-      firstRouteeMessages(3) should be (10)
+      firstRouteeMessages(0) should be(1)
+      firstRouteeMessages(1) should be(4)
+      firstRouteeMessages(2) should be(7)
+      firstRouteeMessages(3) should be(10)
     }
 
-    it(s"should only check mailbox sizes ... TBC ") {
-      //fail("TBC")
+    it(s"when an routee is slow it should not take traffic once over lowWaterMark") {
+      val fast = TestActorRef(new Tester())
+      val slow = TestActorRef(new Tester(100))
+      val routees = Seq(fast, slow)
+      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routees, lowWaterMark =2)))
+      (1 to 20) map (i => router ! i)
+      fast.underlyingActor.messagesReveived.size should be(18)
+      slow.underlyingActor.messagesReveived.size should be(2)
     }
   }
 }
 
-class Tester(maxQueue: Int = Int.MaxValue) extends Actor {
+class Tester(sleepMillis: Int = 0) extends Actor {
   var messagesReveived = List.empty[Int]
   def receive = {
-    case e:Int => 
+    case e: Int ⇒
       messagesReveived = messagesReveived :+ e
-    case _ => throw new Exception("--- bad ---")
+      Thread sleep sleepMillis
+    case _ ⇒ throw new Exception("--- bad ---")
   }
 }
 
