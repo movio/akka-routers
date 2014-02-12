@@ -30,7 +30,7 @@ case class RoundRobinStepping(routeeRefs: Iterable[ActorRef] = Seq.empty,
       } else 0L
     }
 
-    def nextActor = getNextActor(routeeRefs, routeeProvider.context.system.deadLetters, queueLength, currentStep, count)
+    def nextActor = getNextActor(routeeRefs, routeeProvider.context.system.deadLetters, queueLength, isSuspended, currentStep, count, stepSize)
 
     {
       case (sender, message) ⇒
@@ -56,6 +56,7 @@ object RoundRobinStepping {
   def getNextActor(routees: Iterable[ActorRef],
                    defaultRoutee: ActorRef,
                    queueLength: ActorRef ⇒ Long,
+                   isSuspended: ActorRef ⇒ Boolean,
                    currentStep: AtomicLong,
                    count: AtomicLong,
                    stepSize: Int = 10): ActorRef = {
@@ -64,25 +65,19 @@ object RoundRobinStepping {
     @tailrec
     def next(accumulator: Int = 0): ActorRef = {
       if (accumulator >= currentRoutees.size) {
-        println("aaaaaaaaaaaa")
         currentStep.getAndIncrement
         next(0)
       } else {
         val proposed = currentRoutees((count.getAndIncrement % currentRoutees.size).asInstanceOf[Int])
 
         val length = queueLength(proposed)
-        val thisStep = (length % stepSize).asInstanceOf[Int]
-        println("aaa "+thisStep )
-        println("len "+length  )
-        println("ss "+stepSize   )
+        val thisStep = (length / stepSize)
 
-
-        //if (!proposed.isTerminated  // FIXME test
-        //&& !isSuspended(proposed) // FIXME test
-        if (thisStep == currentStep.get)
+        if (proposed.isTerminated || isSuspended(proposed))
+          next(accumulator + 1)
+        else if (thisStep == currentStep.get) {
           proposed
-        else if (thisStep < currentStep.get) {
-          println("aa")
+        } else if (thisStep < currentStep.get) {
           currentStep.set(thisStep)
           proposed
         } else {
