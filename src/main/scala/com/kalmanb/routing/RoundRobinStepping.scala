@@ -23,7 +23,7 @@ case class RoundRobinStepping(routeeRefs: Iterable[ActorRef] = Seq.empty,
     val count = new AtomicLong(0)
 
     // Unfortunate the numberOfMessages returns 0 if unknown
-    def queueLength = (target: ActorRef) ⇒ {
+    def queueLength(target: ActorRef) = {
       if (hasMessages(target)) {
         val num = numberOfMessages(target)
         if (num > 0) num else Long.MaxValue

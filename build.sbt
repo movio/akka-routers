@@ -2,9 +2,11 @@ organization := "com.kalmanb"
 
 name := "akka-routers"
 
-version := "2.1.2_0.1.0-SNAPSHOT"
+version := "2.1.0_0.1.0"
 
 scalaVersion := "2.10.3"
+
+publishTo := Some("repo" at "http://")
 
 libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "2.0" % "test",
