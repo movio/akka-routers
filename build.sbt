@@ -2,7 +2,7 @@ organization := "com.kalmanb"
 
 name := "akka-routers"
 
-version := "2.1.0_0.2.0-SNAPSHOT"
+version := "2.3.6_0.2.0-SNAPSHOT"
 
 scalaVersion := "2.10.3"
 
@@ -16,8 +16,8 @@ libraryDependencies ++= Seq(
 
 // TODO - akka version based on version
 libraryDependencies ++= Seq(
-  "com.typesafe.akka" %% "akka-actor" % "2.1.0",
-  "com.typesafe.akka" %% "akka-testkit" % "2.1.0" % "test"
+  "com.typesafe.akka" %% "akka-actor" % "2.3.6",
+  "com.typesafe.akka" %% "akka-testkit" % "2.3.6" % "test"
 )
 
 

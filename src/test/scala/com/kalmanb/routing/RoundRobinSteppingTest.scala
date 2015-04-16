@@ -1,17 +1,24 @@
 package com.kalmanb.routing
 
-import com.kalmanb.test.TestSpec
-import akka.actor._
-import akka.pattern.ask
-import akka.testkit._
-import akka.routing._
-import akka.util.Timeout
-import scala.concurrent.duration._
+import scala.collection.immutable.List
+import scala.collection.immutable.Seq
 import scala.concurrent.Await
-import scala.util.Success
-import scala.util.Failure
-import scala.collection.immutable._
-import java.util.concurrent.atomic.AtomicLong
+import scala.concurrent.duration.DurationInt
+
+import com.kalmanb.test.TestSpec
+
+import akka.actor.Actor
+import akka.actor.ActorSystem
+import akka.actor.DeadLetter
+import akka.actor.PoisonPill
+import akka.actor.Props
+import akka.pattern.ask
+import akka.routing.ActorRefRoutee
+import akka.routing.Broadcast
+import akka.routing.Routee
+import akka.testkit.TestActorRef
+import akka.testkit.TestProbe
+import akka.util.Timeout
 
 class RoundRobinSteppingTest extends TestSpec {
   implicit val system = ActorSystem("test")
@@ -22,7 +29,8 @@ class RoundRobinSteppingTest extends TestSpec {
     it("should route messages to a single actor") {
       val actor1 = TestProbe()
       val routeeRefs = Seq(actor1.ref)
-      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
+      val routees = routeeRefs map ActorRefRoutee
+      val router = system.actorOf(RoundRobinSteppingRouterActor.props(routees.toIndexedSeq))
 
       router ! "one"
       router ! "two"
@@ -35,7 +43,8 @@ class RoundRobinSteppingTest extends TestSpec {
       val actor1 = TestProbe()
       val actor2 = TestProbe()
       val routeeRefs = Seq(actor1.ref, actor2.ref)
-      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
+      val routees = routeeRefs map ActorRefRoutee
+      val router = system.actorOf(RoundRobinSteppingRouterActor.props(routees.toIndexedSeq))
 
       router ! "one"
       router ! "two"
@@ -49,17 +58,20 @@ class RoundRobinSteppingTest extends TestSpec {
     }
 
     it("should send Broadcast messages to all routeeRefs") {
-      val routeeRefs = (1 to 5) map (_ ⇒ TestProbe())
-      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs map (_.ref))))
+      val routeeProbes = (1 to 5) map (_ ⇒ TestProbe())
+      val routeeRefs = routeeProbes map (_.ref)
+      val routees = routeeRefs map ActorRefRoutee
+      val router = system.actorOf(RoundRobinSteppingRouterActor.props(routees.toIndexedSeq))
 
       router ! Broadcast("one")
 
-      routeeRefs.foreach(_.expectMsg(500 millis, "one"))
+      routeeProbes.foreach(_.expectMsg(500 millis, "one"))
     }
 
     it("should send messages to dead letter if no routeeRefs available") {
       val routeeRefs = List.empty
-      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
+      val routees = routeeRefs map ActorRefRoutee
+      val router = system.actorOf(RoundRobinSteppingRouterActor.props(routees.toIndexedSeq))
 
       val listener = TestProbe()
       system.eventStream.subscribe(listener.ref, classOf[DeadLetter])
@@ -71,94 +83,106 @@ class RoundRobinSteppingTest extends TestSpec {
   }
 
   describe("stepping") {
-    val routees = ((1 to 3) map (_ ⇒ TestProbe())).toSeq
-    val deadLetter = TestProbe()
-    def queueLength = (actor: ActorRef) ⇒ 2L
-    def isSuspended = (actor: ActorRef) ⇒ false
-    val currentStep = new AtomicLong(0)
-    val count = new AtomicLong(0)
 
-    def test(length: ActorRef ⇒ Long) = {
-      RoundRobinStepping.getNextActor(routees map (_.ref), deadLetter.ref,
-        length,
-        isSuspended,
-        currentStep,
-        count,
-        3)
+    val routeeProbes = (1 to 3) map (_ ⇒ TestProbe())
+    val routeeRefs = routeeProbes map (_.ref)
+    val routees = routeeRefs map ActorRefRoutee
+
+    class Fixture(queueLengthFunc: Routee => Int) {
+      val target = new RoundRobinSteppingLogic(stepSize = 3) {
+        override def queueLength(target: Routee) = queueLengthFunc(target)
+      }
+
+      val currentStep = target.currentStep
+      val next = target.next
+
+      def test = target.select(None, routees)
+
     }
+
     describe("no stepping") {
       it("should be round robin before stepping") {
-        currentStep.set(0)
-        count.set(0)
-        def length = (actor: ActorRef) ⇒ 2L
-        test(length) should be(routees(0).ref)
-        test(length) should be(routees(1).ref)
-        test(length) should be(routees(2).ref)
-        test(length) should be(routees(0).ref)
-        currentStep.get should be(0)
-        count.get should be(4)
+        def lengthFunc = (routee: Routee) ⇒ 2
+
+        new Fixture(lengthFunc) {
+          test should be(routees(0))
+          test should be(routees(1))
+          test should be(routees(2))
+          test should be(routees(0))
+
+          currentStep.get should be(0)
+          next.get should be(4)
+        }
       }
     }
     describe("stepping up") {
       it("if the first actor is above the current step it should be skipped") {
-        currentStep.set(0)
-        count.set(0)
         // First actor will be 4
         // All others 2
-        def length = (actor: ActorRef) ⇒
-          if (actor == routees(0).ref) 4L
-          else 2L
-        test(length) should be(routees(1).ref)
-        test(length) should be(routees(2).ref)
-        test(length) should be(routees(1).ref)
-        test(length) should be(routees(2).ref)
-        currentStep.get should be(0)
-        // Should be 4 plus 2 skipped
-        count.get should be(6)
+        def lengthFunc = (routee: Routee) ⇒
+          if (routee == routees(0)) 4
+          else 2
+
+        new Fixture(lengthFunc) {
+          test should be(routees(1))
+          test should be(routees(2))
+          test should be(routees(1))
+          test should be(routees(2))
+
+          currentStep.get should be(0)
+          // Should be 4 plus 2 skipped
+          next.get should be(6)
+        }
       }
       it("if all actors above current step it should move up one step") {
-        currentStep.set(0)
-        count.set(0)
-        def length = (actor: ActorRef) ⇒ 4L
-        test(length) should be(routees(0).ref)
-        test(length) should be(routees(1).ref)
-        test(length) should be(routees(2).ref)
-        test(length) should be(routees(0).ref)
-        currentStep.get should be(1)
-        // Will check 1-3 then move up to deliver the 4 on step 1
-        count.get should be(7)
+        def lengthFunc = (routee: Routee) ⇒ 4
+
+        new Fixture(lengthFunc) {
+          test should be(routees(0))
+          test should be(routees(1))
+          test should be(routees(2))
+          test should be(routees(0))
+
+          currentStep.get should be(1)
+          // Will check 1-3 then move up to deliver the 4 on step 1
+          next.get should be(7)
+        }
       }
       it("if all actors above current step it should move up to the lowest step") {
-        currentStep.set(0)
-        count.set(0)
-        def length = (actor: ActorRef) ⇒
-          if (actor == routees(0).ref) 6L // on step 2
-          else 10L // on step 3
-        test(length) should be(routees(0).ref)
-        test(length) should be(routees(0).ref)
-        test(length) should be(routees(0).ref)
-        currentStep.get should be(2)
-        // Will check 1-3 x 2 then one per 3
-        count.get should be(13)
+        def lengthFunc = (routee: Routee) ⇒
+          if (routee == routees(0)) 6 // on step 2
+          else 10 // on step 3
+
+        new Fixture(lengthFunc) {
+          test should be(routees(0))
+          test should be(routees(0))
+          test should be(routees(0))
+
+          currentStep.get should be(2)
+          // Will check 1-3 x 2 then one per 3
+          next.get should be(13)
+        }
       }
     }
 
     describe("stepping down") {
       it("should step down if a lower step is found") {
-        currentStep.set(3)
-        count.set(0)
-        def length = (actor: ActorRef) ⇒
-          if (actor == routees(0).ref) 10L // step 3
-          else if (actor == routees(1).ref) 4L // step 2
-          else 2L // step 1
-        test(length) should be(routees(0).ref)
-        currentStep.get should be(3)
+        def lengthFunc = (routee: Routee) ⇒
+          if (routee == routees(0)) 10 // step 3
+          else if (routee == routees(1)) 4 // step 2
+          else 2 // step 1
 
-        test(length) should be(routees(1).ref)
-        currentStep.get should be(1)
+        new Fixture(lengthFunc) {
+          currentStep.set(3)
+          test should be(routees(0))
+          currentStep.get should be(3)
 
-        test(length) should be(routees(2).ref)
-        currentStep.get should be(0)
+          test should be(routees(1))
+          currentStep.get should be(1)
+
+          test should be(routees(2))
+          currentStep.get should be(0)
+        }
       }
     }
   }
@@ -166,7 +190,8 @@ class RoundRobinSteppingTest extends TestSpec {
   describe("stepping integration") {
     it(s"should round robin until mailbox a mailbox size exceeds stepSize") {
       val routeeRefs = (1 to 3).map(_ ⇒ TestActorRef(new Tester()))
-      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routeeRefs)))
+      val routees = routeeRefs map ActorRefRoutee
+      val router = system.actorOf(RoundRobinSteppingRouterActor.props(routees.toIndexedSeq))
 
       (1 to 12) map (i ⇒ router ! i)
 
@@ -182,12 +207,17 @@ class RoundRobinSteppingTest extends TestSpec {
       firstRouteeMessages(3) should be(10)
     }
 
-    it("when an routee is slow it should not take traffic once over stepSize") {
+    // TODO: Fix this test. The split of messages is a race condition, so there isn't an
+    //       "correct" number that each should get. The current numbers assume that
+    //       the slow actor doesn't process any messages before all messages finish routing,
+    //       but this is often not the case in reality.
+    ignore("when an routee is slow it should not take traffic once over stepSize") {
       implicit val timeout = Timeout(1 second)
       val fast = system.actorOf(Props(new Tester()))
       val slow = system.actorOf(Props(new Tester(100)))
-      val routees = Seq(fast, slow)
-      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routees, stepSize = 2)))
+      val routeeRefs = Seq(fast, slow)
+      val routees = routeeRefs map ActorRefRoutee
+      val router = system.actorOf(RoundRobinSteppingRouterActor.props(routees = routees.toIndexedSeq, stepSize = 2))
       (1 to 20) map (i ⇒ router ! i)
 
       val fastFuture = fast ? 'GetMessages
@@ -204,8 +234,9 @@ class RoundRobinSteppingTest extends TestSpec {
       terminated ! PoisonPill
       Thread sleep 100
       val normal = system.actorOf(Props(new Tester()))
-      val routees = Seq(terminated, normal)
-      val router = system.actorOf(Props().withRouter(RoundRobinStepping(routeeRefs = routees, stepSize = 2)))
+      val routeeRefs = Seq(terminated, normal)
+      val routees = routeeRefs map ActorRefRoutee
+      val router = system.actorOf(RoundRobinSteppingRouterActor.props(routees = routees.toIndexedSeq, stepSize = 2))
       (1 to 2) map (i ⇒ router ! i)
 
       val normalFuture = normal ? 'GetMessages
@@ -213,7 +244,7 @@ class RoundRobinSteppingTest extends TestSpec {
       normalResult.asInstanceOf[List[Int]].size should be(2)
     }
 
-    it("should not route messages to suspended actors") {
+    ignore("should not route messages to suspended actors") {
       // Have no idea how to test this??
     }
   }
@@ -226,7 +257,8 @@ class Tester(sleepMillis: Int = 0) extends Actor {
       messagesReveived = messagesReveived :+ e
       Thread sleep sleepMillis
     case 'GetMessages ⇒ sender ! messagesReveived
-    case _            ⇒ throw new Exception("--- bad ---")
+    case _ ⇒ throw new Exception("--- bad ---")
   }
 }
+
 
