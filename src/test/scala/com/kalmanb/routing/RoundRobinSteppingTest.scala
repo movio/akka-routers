@@ -240,7 +240,7 @@ class RoundRobinSteppingTest extends TestSpec {
       (1 to 2) map (i ⇒ router ! i)
 
       val normalFuture = normal ? 'GetMessages
-      val normalResult = Await.result(normalFuture, 1 second)
+      val normalResult = Await.result(normalFuture, 2 seconds)
       normalResult.asInstanceOf[List[Int]].size should be(2)
     }
 
@@ -260,5 +260,6 @@ class Tester(sleepMillis: Int = 0) extends Actor {
     case _ ⇒ throw new Exception("--- bad ---")
   }
 }
+
 
 
