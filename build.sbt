@@ -20,7 +20,9 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-testkit" % "2.3.14" % "test"
 )
 
-
+releaseVersionBump := sbtrelease.Version.Bump.Minor
+releaseTagName := s"${version.value}"
+releaseCrossBuild := true
 
 
 
