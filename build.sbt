@@ -2,7 +2,7 @@ organization := "com.kalmanb"
 
 name := "akka-routers"
 
-version := "2.3.14_0.2.0"
+version := "2.3.14_0.3.0-SNAPSHOT"
 
 scalaVersion := "2.11.8"
 
